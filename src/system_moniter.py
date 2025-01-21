@@ -15,64 +15,103 @@ timestamps = {}
 
 # Function to get a list of running processes
 def get_process_list():
-    return [(proc.pid, proc.name()) for proc in psutil.process_iter(['pid', 'name'])]
-
+    filtered_processes = []
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'username']):
+            try:
+                # Get process information
+                pid = proc.info['pid']
+                name = proc.info['name']
+                username = proc.info['username']
+                
+                # Exclude system processes (adjust based on your OS)
+                if username in ["SYSTEM", "Local Service", "Network Service"]:
+                    continue
+                
+                # Exclude known system/idle processes
+                if name.lower() in ["system idle process", "system", "svchost.exe", "csrss.exe"]:
+                    continue
+                
+                # Add the process to the list if it passes all filters
+                filtered_processes.append((pid, name))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception as e:
+        messagebox.showerror("Error", f"Error fetching processes: {e}")
+    
+    return filtered_processes
+    
 # Monitor the selected process
 def monitor_process(pid):
     try:
         process = psutil.Process(pid)
         global cpu_usage, memory_usage, timestamps
-        cpu_usage[pid] = []
-        memory_usage[pid] = []
-        timestamps[pid] = []
 
         start_time = time.time()
         while pid in processes_to_watch:
-            cpu = process.cpu_percent(interval=1)
+            cpu = process.cpu_percent(interval=0.1)  # Shorter interval for real-time accuracy
             memory = process.memory_info().rss / 1024 / 1024  # Convert to MB
             elapsed_time = time.time() - start_time
 
-            cpu_usage[pid].append(cpu)
-            memory_usage[pid].append(memory)
-            timestamps[pid].append(elapsed_time)
-
+            # Check if the pid is still being monitored before appending
+            if pid in cpu_usage and pid in memory_usage and pid in timestamps:
+                cpu_usage[pid].append(cpu)
+                memory_usage[pid].append(memory)
+                timestamps[pid].append(elapsed_time)
+            else:
+                break  # Exit the loop if the pid is no longer monitored
     except psutil.NoSuchProcess:
         messagebox.showinfo("Info", f"Monitoring stopped: Process {pid} ended.")
 
 # Start monitoring in a separate thread
 def start_monitoring(pid):
+    if pid not in cpu_usage:
+        cpu_usage[pid] = [0]  # Initialize with a starting value
+    if pid not in memory_usage:
+        memory_usage[pid] = [0]  # Initialize with a starting value
+    if pid not in timestamps:
+        timestamps[pid] = [0]  # Initialize timestamps with a starting point
+
     thread = Thread(target=monitor_process, args=(pid,), daemon=True)
     thread.start()
 
 # Update the graph in real-time
 def update_graph(frame, ax):
     ax.clear()
-    for pid in list(processes_to_watch):  # Iterate over a copy of keys
-        if pid in timestamps and timestamps[pid]:  # Check if pid exists and has data
-            ax.plot(timestamps[pid], cpu_usage[pid], label=f"CPU [PID {pid}] (%)")
-            ax.plot(timestamps[pid], memory_usage[pid], label=f"Memory [PID {pid}] (MB)")
-        else:
-            # Skip missing or invalid data
-            print(f"Skipping PID {pid} (no data or process ended)")
-            if pid in processes_to_watch:
-                del processes_to_watch[pid]  # Clean up if the process ended
+    for pid in list(processes_to_watch):  # Iterate over monitored processes
+        if pid in timestamps and timestamps[pid]:  # Check for valid data
+            app_name = processes_to_watch[pid]  # Get the application's name
+            current_cpu = cpu_usage[pid][-1] if cpu_usage[pid] else 0  # Get the latest CPU usage
+            current_memory = memory_usage[pid][-1] if memory_usage[pid] else 0  # Get the latest memory usage
+            
+            # Plot CPU and memory usage over time
+            ax.plot(timestamps[pid], cpu_usage[pid], label=f"{app_name} - CPU (%)")
+            ax.plot(timestamps[pid], memory_usage[pid], label=f"{app_name} - Memory (MB)")
+
+            # Add dynamic text annotations for CPU and Memory
+            ax.text(timestamps[pid][-1], cpu_usage[pid][-1], f"{current_cpu:.1f}%", fontsize=8)
+            ax.text(timestamps[pid][-1], memory_usage[pid][-1], f"{current_memory:.1f} MB", fontsize=8)
+
+    # Graph aesthetics
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Usage")
-    ax.set_title("Process Performance")
-    ax.legend()
-    ax.tight_layout()
+    ax.set_title("Process Performance Over Time")
+    ax.legend(loc='upper left')
 
 # Function to handle process selection
 def select_process():
-    selected = process_listbox.get(process_listbox.curselection())
-    pid = int(selected.split(" ")[0])
-    if pid not in processes_to_watch:
-        processes_to_watch[pid] = selected.split(" - ")[1]
-        messagebox.showinfo("Info", f"Monitoring process: {selected}")
-        start_monitoring(pid)
-        update_watched_processes()
-    else:
-        messagebox.showwarning("Warning", f"Process {pid} is already being monitored.")
+    try:
+        selected = process_listbox.get(process_listbox.curselection())
+        pid = int(selected.split(" ")[0])
+        if pid not in processes_to_watch:
+            processes_to_watch[pid] = selected.split(" - ")[1]
+            messagebox.showinfo("Info", f"Monitoring process: {selected}")
+            start_monitoring(pid)
+            update_watched_processes()
+        else:
+            messagebox.showwarning("Warning", f"Process {pid} is already being monitored.")
+    except tk.TclError:
+        messagebox.showerror("Error", "Please select a process to monitor.")
 
 # Update the list of watched processes
 def update_watched_processes():
