@@ -70,7 +70,9 @@ def monitor_process(pid):
             start_time = time.time()
             while pid in processes_to_watch:
                 # Collect CPU and memory usage
-                cpu = process.cpu_percent(interval=1)  # Short interval for meaningful data
+                cpu = process.cpu_percent(interval=None)  # Short interval for meaningful data
+                if cpu == 0:
+                    cpu = psutil.cpu_percent(interval=1)
                 memory = process.memory_info().rss / 1024 / 1024  # Convert memory to MB
                 elapsed_time = time.time() - start_time
 
