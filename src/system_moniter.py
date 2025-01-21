@@ -6,12 +6,17 @@ from threading import Thread
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.animation import FuncAnimation
-
+import csv
+import os
 # Global variables to hold process data
 processes_to_watch = {}  # Dictionary to store PID and process name
 cpu_usage = {}
 memory_usage = {}
 timestamps = {}
+
+#saving CS files
+TARGET_DIR = "./monitoring_results"  # Change this to your desired path
+os.makedirs(TARGET_DIR, exist_ok=True)  # Ensure the directory exists
 
 # Function to get a list of running processes
 def get_process_list():
@@ -43,35 +48,45 @@ def get_process_list():
     return filtered_processes
     
 # Monitor the selected process
+
 def monitor_process(pid):
     try:
         process = psutil.Process(pid)
+        app_name = processes_to_watch[pid]
         global cpu_usage, memory_usage, timestamps
 
         # Initialize CPU usage measurement
         process.cpu_percent(interval=None)  # First call initializes metrics
 
-        start_time = time.time()
-        while pid in processes_to_watch:
-            cpu = process.cpu_percent(interval=0.5)  # Use a short interval for meaningful data
-            memory = process.memory_info().rss / 1024 / 1024  # Convert memory to MB
+        # Open CSV file for writing
+         # Set the file path
+        filename = os.path.join(TARGET_DIR, f"{app_name}_monitoring.csv")
 
-            # Fallback: System-wide CPU usage if process CPU is 0%
-            if cpu == 0:
-                cpu = psutil.cpu_percent(interval=0.5)
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            # Write the header
+            writer.writerow(["Time (s)", "CPU Usage (%)", "Memory Usage (MB)"])
 
-            elapsed_time = time.time() - start_time
+            start_time = time.time()
+            while pid in processes_to_watch:
+                # Collect CPU and memory usage
+                cpu = process.cpu_percent(interval=1)  # Short interval for meaningful data
+                memory = process.memory_info().rss / 1024 / 1024  # Convert memory to MB
+                elapsed_time = time.time() - start_time
 
-            # Debug: Log the collected metrics
-            #print(f"PID: {pid}, CPU: {cpu:.2f}, Memory: {memory:.2f} MB, Time: {elapsed_time:.2f}")
+                # Debug: Log the collected metrics
+                #print(f"PID: {pid}, CPU: {cpu:.2f}, Memory: {memory:.2f} MB, Time: {elapsed_time:.2f}")
 
-            # Safely append data to dictionaries
-            if pid in cpu_usage and pid in memory_usage and pid in timestamps:
-                cpu_usage[pid].append(cpu)
-                memory_usage[pid].append(memory)
-                timestamps[pid].append(elapsed_time)
-            else:
-                break  # Stop monitoring if the process is no longer tracked
+                # Safely append data to dictionaries
+                if pid in cpu_usage and pid in memory_usage and pid in timestamps:
+                    cpu_usage[pid].append(cpu)
+                    memory_usage[pid].append(memory)
+                    timestamps[pid].append(elapsed_time)
+
+                    # Write row to CSV
+                    writer.writerow([elapsed_time, cpu, memory])
+                else:
+                    break  # Stop monitoring if the process is no longer tracked
     except psutil.NoSuchProcess:
         messagebox.showinfo("Info", f"Monitoring stopped: Process {pid} ended.")
     except Exception as e:
