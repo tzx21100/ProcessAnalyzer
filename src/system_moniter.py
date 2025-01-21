@@ -17,12 +17,13 @@ timestamps = {}
 def get_process_list():
     filtered_processes = []
     try:
-        for proc in psutil.process_iter(['pid', 'name', 'username']):
+        for proc in psutil.process_iter(['pid', 'name', 'username','cpu_percent']):
             try:
                 # Get process information
                 pid = proc.info['pid']
                 name = proc.info['name']
                 username = proc.info['username']
+                cpu = proc.info['cpu_percent']
                 
                 # Exclude system processes (adjust based on your OS)
                 if username in ["SYSTEM", "Local Service", "Network Service"]:
@@ -47,30 +48,43 @@ def monitor_process(pid):
         process = psutil.Process(pid)
         global cpu_usage, memory_usage, timestamps
 
+        # Initialize CPU usage measurement
+        process.cpu_percent(interval=None)  # First call initializes metrics
+
         start_time = time.time()
         while pid in processes_to_watch:
-            cpu = process.cpu_percent(interval=0.1)  # Shorter interval for real-time accuracy
-            memory = process.memory_info().rss / 1024 / 1024  # Convert to MB
+            cpu = process.cpu_percent(interval=0.5)  # Use a short interval for meaningful data
+            memory = process.memory_info().rss / 1024 / 1024  # Convert memory to MB
+
+            # Fallback: System-wide CPU usage if process CPU is 0%
+            if cpu == 0:
+                cpu = psutil.cpu_percent(interval=0.5)
+
             elapsed_time = time.time() - start_time
 
-            # Check if the pid is still being monitored before appending
+            # Debug: Log the collected metrics
+            #print(f"PID: {pid}, CPU: {cpu:.2f}, Memory: {memory:.2f} MB, Time: {elapsed_time:.2f}")
+
+            # Safely append data to dictionaries
             if pid in cpu_usage and pid in memory_usage and pid in timestamps:
                 cpu_usage[pid].append(cpu)
                 memory_usage[pid].append(memory)
                 timestamps[pid].append(elapsed_time)
             else:
-                break  # Exit the loop if the pid is no longer monitored
+                break  # Stop monitoring if the process is no longer tracked
     except psutil.NoSuchProcess:
         messagebox.showinfo("Info", f"Monitoring stopped: Process {pid} ended.")
+    except Exception as e:
+        print(f"Error monitoring process {pid}: {e}")
 
 # Start monitoring in a separate thread
 def start_monitoring(pid):
     if pid not in cpu_usage:
-        cpu_usage[pid] = [0]  # Initialize with a starting value
+        cpu_usage[pid] = []  # Initialize with an empty list
     if pid not in memory_usage:
-        memory_usage[pid] = [0]  # Initialize with a starting value
+        memory_usage[pid] = []  # Initialize with an empty list
     if pid not in timestamps:
-        timestamps[pid] = [0]  # Initialize timestamps with a starting point
+        timestamps[pid] = []  # Initialize with an empty list
 
     thread = Thread(target=monitor_process, args=(pid,), daemon=True)
     thread.start()
@@ -83,7 +97,10 @@ def update_graph(frame, ax):
             app_name = processes_to_watch[pid]  # Get the application's name
             current_cpu = cpu_usage[pid][-1] if cpu_usage[pid] else 0  # Get the latest CPU usage
             current_memory = memory_usage[pid][-1] if memory_usage[pid] else 0  # Get the latest memory usage
-            
+
+            # Debugging output
+            #print(f"Updating graph for PID {pid}: CPU={current_cpu}%, Memory={current_memory}MB")
+
             # Plot CPU and memory usage over time
             ax.plot(timestamps[pid], cpu_usage[pid], label=f"{app_name} - CPU (%)")
             ax.plot(timestamps[pid], memory_usage[pid], label=f"{app_name} - Memory (MB)")
@@ -97,6 +114,7 @@ def update_graph(frame, ax):
     ax.set_ylabel("Usage")
     ax.set_title("Process Performance Over Time")
     ax.legend(loc='upper left')
+
 
 # Function to handle process selection
 def select_process():
@@ -144,6 +162,23 @@ def create_gui():
     root = tk.Tk()
     root.title("Process Analyzer")
 
+    # Function to handle cleanup on close
+    def on_close():
+        # Stop monitoring processes
+        processes_to_watch.clear()
+        cpu_usage.clear()
+        memory_usage.clear()
+        timestamps.clear()
+
+        # Print a message for confirmation (optional)
+        print("Monitoring stopped. Exiting application.")
+        
+        # Destroy the Tkinter window
+        root.destroy()
+
+    # Bind the cleanup function to the close event
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
     # Create a frame for the process selection
     frame_left = tk.Frame(root)
     frame_left.pack(side=tk.LEFT, padx=10, pady=10)
@@ -186,6 +221,7 @@ def create_gui():
 
     # Start the Tkinter event loop
     root.mainloop()
+
 
 # Main function
 if __name__ == "__main__":
